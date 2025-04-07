@@ -1,0 +1,112 @@
+# Required Libraries
+import geopandas as gpd
+import numpy as np
+import matplotlib.pyplot as plt
+import libpysal
+from esda.moran import Moran, Moran_Local
+import matplotlib.patches as mpatches
+
+
+# Load spatial data
+spatial_data = gpd.read_file("data/SA1_rent_inc_v2.shp")
+spatial_data
+
+
+# Check for NA values
+print(spatial_data['rent_inc_r'].isna().sum())
+
+# Display rows with NA
+print(spatial_data[spatial_data['rent_inc_r'].isna()].head())
+
+# Convert NA to 0
+spatial_data['rent_inc_r'].fillna(0, inplace=True)
+
+# Verify NA values are replaced
+print(spatial_data['rent_inc_r'].isna().sum())
+
+# Plot rent-to-income ratio
+spatial_data.plot(column='rent_inc_r', scheme='quantiles', cmap='RdYlGn_r', legend=True,
+                  edgecolor='black', linewidth=0.1)
+plt.title("Rent to Income Ratio")
+plt.axis('off')
+plt.show()
+
+
+# Spatial weights based on contiguity
+w = libpysal.weights.Queen.from_dataframe(spatial_data)
+w.transform = 'R'
+
+# Global Moran's I
+rent_to_inc_ratio = spatial_data['rent_inc_r'].values
+global_moran = Moran(rent_to_inc_ratio, w)
+
+print("Global Moran's I:", global_moran.I)
+print("p-value:", global_moran.p_sim)
+
+
+
+# Local Moran's I
+local_moran = Moran_Local(rent_to_inc_ratio, w)
+
+# Add Local Moran's I results to DataFrame
+spatial_data['local_I'] = local_moran.Is
+spatial_data['p_value'] = local_moran.p_sim
+
+# Calculate mean for cluster classification
+mean_value = rent_to_inc_ratio.mean()
+
+# Define clusters based on significance and quadrant
+sig = local_moran.p_sim <= 0.05
+
+spatial_data['cluster'] = np.where(sig & (local_moran.q == 1), 'High-High',
+                           np.where(sig & (local_moran.q == 2), 'Low-High',
+                           np.where(sig & (local_moran.q == 3), 'Low-Low',
+                           np.where(sig & (local_moran.q == 4), 'High-Low', 'Non-significant'))))
+
+# Plot clusters
+fig, ax = plt.subplots(figsize=(10, 8))
+colors = {'High-High': 'red', 'Low-Low': 'blue', 'High-Low': 'orange', 'Low-High': 'green', 'Non-significant': '#edf2f4'}
+spatial_data['color'] = spatial_data['cluster'].map(colors)
+spatial_data.plot(color=spatial_data['color'], edgecolor='black', linewidth=0.1, ax=ax)
+
+# Creating legend manually
+patches = [mpatches.Patch(color=color, label=cluster) for cluster, color in colors.items()]
+plt.legend(handles=patches, title="Local Moran's I Clusters", loc='best')
+
+plt.title("Local Moran's I Clusters")
+plt.axis('off')
+plt.show()
+
+
+# Spatial lag (average of neighboring values)
+spatial_data['spatial_lag'] = libpysal.weights.lag_spatial(w, rent_to_inc_ratio)
+
+# Moran Scatter Plot
+fig, ax = plt.subplots(figsize=(8, 8))
+
+for cluster, data in spatial_data.groupby('cluster'):
+    ax.scatter(data['rent_inc_r'], data['spatial_lag'], 
+               label=cluster, alpha=0.5, color=colors[cluster], s=30)
+
+# Add regression line
+m, b = np.polyfit(spatial_data['rent_inc_r'], spatial_data['spatial_lag'], 1)
+ax.plot(spatial_data['rent_inc_r'], m * spatial_data['rent_inc_r'] + b, color='black')
+
+# Mean lines
+plt.axvline(mean_value, linestyle='--', color='black')
+plt.axhline(spatial_data['spatial_lag'].mean(), linestyle='--', color='black')
+
+# Annotate quadrants
+plt.text(spatial_data['rent_inc_r'].max()/2, spatial_data['spatial_lag'].max()/2, "HH", color="red", fontsize=14)
+plt.text(spatial_data['rent_inc_r'].min()/2, spatial_data['spatial_lag'].max()/2, "LH", color="green", fontsize=14)
+plt.text(spatial_data['rent_inc_r'].max()/2, spatial_data['spatial_lag'].min()/2, "HL", color="orange", fontsize=14)
+plt.text(spatial_data['rent_inc_r'].min()/2, spatial_data['spatial_lag'].min()/2, "LL", color="blue", fontsize=14)
+
+plt.xlabel("Rent-to-Income Ratio")
+plt.ylabel("Spatial Lag of Rent-to-Income Ratio")
+plt.title("Moran Scatter Plot")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
